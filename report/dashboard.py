@@ -23,12 +23,31 @@ from combined_components import FormGroup, CombinedComponent
 # Dropdown — Employee/Team selector at the top of the dashboard
 # ---------------------------------------------------------------------------
 class ReportDropdown(Dropdown):
-    """Dropdown that knows it's listing entities of `model`'s type."""
+    """Dropdown that knows it's listing entities of `model`'s type.
+
+    Overrides the parent ``build_component`` to: (a) set the dropdown
+    label to ``model.name``, and (b) build each ``<option>`` with
+    explicitly-typed string attributes. The parent class assigns
+    ``selected=""`` when an option is not selected; some fasthtml
+    versions reject that empty-string attribute and raise a
+    ``TypeError: sequence item 1: expected str instance, bool found``
+    while serialising the tag. Building the kwargs dict conditionally
+    sidesteps the issue.
+    """
 
     def build_component(self, entity_id, model):
-        # Use the human-readable model name as the dropdown label.
+        from fasthtml.common import Select, Option
         self.label = model.name
-        return super().build_component(entity_id, model)
+        entity_id_str = str(entity_id)
+
+        options = []
+        for text, value in self.component_data(entity_id, model):
+            attrs = {"value": str(value)}
+            if str(value) == entity_id_str:
+                attrs["selected"] = "selected"
+            options.append(Option(str(text), **attrs))
+
+        return Select(*options, name=self.name)
 
     def component_data(self, entity_id, model):
         # Employee.names() / Team.names() return [(name, id), ...].
@@ -133,10 +152,31 @@ class Visualizations(CombinedComponent):
 # NotesTable — recent notes for this employee/team at the bottom of the page
 # ---------------------------------------------------------------------------
 class NotesTable(DataTable):
-    """A DataTable wired up to the Employee/Team .notes() query."""
+    """A DataTable wired up to the Employee/Team .notes() query.
+
+    Overrides ``build_component`` so each cell value is coerced to a
+    plain Python string before being handed to fasthtml — the parent
+    class hands the raw numpy element straight in, which some fasthtml
+    versions can't serialise cleanly (the same TypeError class as the
+    Dropdown's empty-string attribute issue).
+    """
 
     def component_data(self, entity_id, model):
         return model.notes(entity_id)
+
+    def build_component(self, entity_id, model):
+        from fasthtml.common import Table, Tr, Th, Td
+
+        if not getattr(model, "name", None):
+            return None
+
+        data = self.component_data(entity_id, model)
+        header = Tr(*[Th(str(col)) for col in data.columns])
+        rows = [
+            Tr(*[Td(str(val)) for val in row])
+            for row in data.to_numpy().tolist()
+        ]
+        return Table(header, *rows)
 
 
 # ---------------------------------------------------------------------------
